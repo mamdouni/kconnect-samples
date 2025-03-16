@@ -11,7 +11,7 @@ services:
     volumes:
       - postgres-data:/postgres/data
     environment:
-      POSTGRES_DB: doc
+      POSTGRES_DB: personsdb
       POSTGRES_USER: user
       POSTGRES_PASSWORD: password
       PGDATA: /postgres/data
@@ -48,6 +48,7 @@ services:
 
   init-kafka:
     image: confluentinc/cp-kafka:7.7.0
+    container_name: init-kafka
     entrypoint: [ '/bin/sh', '-c' ]
     command: |
       "
@@ -67,6 +68,8 @@ services:
     container_name: schema-registry
     ports:
       - "8085:8085"
+    links:
+      - kafka
     environment:
       SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: 'PLAINTEXT://kafka:9092' # Use localhost instead of kafka as this url will be called from outside docker later
       SCHEMA_REGISTRY_HOST_NAME: 'schema-registry'
@@ -79,6 +82,9 @@ services:
     container_name: connect
     ports:
       - "8083:8083"
+    links:
+      - init-kafka
+      - schema-registry
     volumes:
       - ${PWD}/target/check-integrity-transformer-1.0-SNAPSHOT.jar:/usr/share/java/check-integrity-transformer/check-integrity-transformer.jar
       - ${PWD}/target/libs:/usr/share/java/check-integrity-transformer/libs
