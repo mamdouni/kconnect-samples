@@ -1,5 +1,6 @@
-package org.example.simple.tranformers;
+package org.example.json.transformers;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.common.config.ConfigDef;
 import org.apache.kafka.connect.connector.ConnectRecord;
@@ -11,23 +12,21 @@ import org.apache.kafka.connect.transforms.Transformation;
 import org.apache.kafka.connect.transforms.util.Requirements;
 import org.apache.kafka.connect.transforms.util.SchemaUtil;
 import org.apache.kafka.connect.transforms.util.SimpleConfig;
+import org.example.json.transformers.converters.PurchaseItemConverter;
+import org.example.json.transformers.schemas.PurchaseItemSchema;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.stream.Collectors;
 
 @Slf4j
-public abstract class RenameField <R extends ConnectRecord<R>> implements Transformation<R> {
+public abstract class MergedPurchaseItemToArray<R extends ConnectRecord<R>> implements Transformation<R> {
 
-    public static final String CURRENT_FIELD_CONFIG = "field.current";
-    public static final String NEW_FIELD_CONFIG = "field.new";
-
+    public static final String JSON_FIELD_CONFIG = "field";
     public static final ConfigDef CONFIG_DEF = new ConfigDef()
-            .define(CURRENT_FIELD_CONFIG, ConfigDef.Type.STRING, ConfigDef.Importance.HIGH, "Field name to rename")
-            .define(NEW_FIELD_CONFIG, ConfigDef.Type.STRING, ConfigDef.Importance.HIGH, "Field new name")
-            ;
-    // as you can see, this transformer can only work with string fields (don't use antoher type of field)
+            .define(JSON_FIELD_CONFIG, ConfigDef.Type.STRING, ConfigDef.Importance.HIGH, "Json field name to format and merge");
 
     protected abstract Schema operatingSchema(R kafkaRecord);
 
@@ -35,99 +34,96 @@ public abstract class RenameField <R extends ConnectRecord<R>> implements Transf
 
     protected abstract R newRecord(R kafkaRecord, Schema updatedSchema, Object updatedValue);
 
-    private String currentFieldName;
-    private String newFieldName;
+    private String fieldName;
 
     @Override
     public void configure(Map<String, ?> map) {
 
         SimpleConfig config = new SimpleConfig(CONFIG_DEF, map);
-        currentFieldName = config.getString(CURRENT_FIELD_CONFIG);
-        newFieldName = config.getString(NEW_FIELD_CONFIG);
-
-        log.info("Configuration: ");
-        config.values().entrySet().stream().map(entry -> entry.getKey() + ": " + entry.getValue()).collect(Collectors.toList()).forEach(log::info);
-        log.info("Current Field Name: {}", currentFieldName);
-        log.info("New Field Name: {}", newFieldName);
+        fieldName = config.getString(JSON_FIELD_CONFIG);
     }
 
     @Override
     public R apply(R record) {
 
-        if(record.value() == null) {
+        try {
+            log.info("Playing MergedPurchaseItemToArray transformation ...");
+            if(record.value() == null) {
+                return record;
+            }
+            if(operatingSchema(record) == null) {
+                return formatWithoutSchema(record);
+            }else {
+                return formatWithSchema(record);
+            }
+        } catch (JsonProcessingException e) {
+            log.error("Error during parsing on the MergedPurchaseItemToArray transformer", e);
             return record;
-        }
-        if(operatingSchema(record) == null) {
-            return renameWithoutSchema(record);
-        }else {
-            return renameWithSchema(record);
         }
     }
 
-    private static final String PURPOSE = "rename a field";
+    private static final String PURPOSE = "format and merge json object";
 
-    private R renameWithoutSchema(R record) {
+    private R formatWithoutSchema(R record) throws JsonProcessingException {
 
-        // extract the value of the record which is a map
         Map<String,Object> recordValues = Requirements.requireMapOrNull(operatingValue(record), PURPOSE);
-
-        Object currentValue = recordValues.get(currentFieldName);
-
-        // create a new map with the updated value
         Map<String, Object> updatedRecordValues = new HashMap<>(recordValues);
-        updatedRecordValues.put(newFieldName,currentValue);
-
+        updatedRecordValues.put(this.fieldName, convertToStructArray((String) recordValues.get(this.fieldName)));
         return newRecord(record, null, updatedRecordValues);
     }
 
-    private R renameWithSchema(R record) {
+    private R formatWithSchema(R record) throws JsonProcessingException {
 
-        //extracting the schema of the record
+        // schema
         Schema schema = operatingSchema(record);
-
-        // copy the schema of the record ( name, version, comments, etc )
         SchemaBuilder builder = SchemaUtil.copySchemaBasics(schema, SchemaBuilder.struct());
-
-        // copy all the existing fields from old schema
-        log.info("Current Schema Builder {}", builder);
-        log.info("Current Schema fields: {}", schema.fields());
         for (Field field : schema.fields()) {
 
-            // remove the current field name from the schema
-            if(Objects.equals(field.name(), currentFieldName)) {
-                continue;
+            if (field.name().equals(this.fieldName)) {
+                builder.field(field.name(), PurchaseItemSchema.PURCHASE_ITEM_ARRAY_SCHEMA_FLAT);
+            } else {
+                builder.field(field.name(), field.schema());
             }
-            builder.field(field.name(), field.schema());
         }
+        Schema updatedSchema = builder.build();
 
-        // add one more field to our schema
-        Schema updatedSchema = builder.field(newFieldName, Schema.STRING_SCHEMA).build();
-
-        log.info("Updated Schema Builder {}", builder);
-        log.info("Updated Schema Fields {}", builder.schema().fields());
-
-        // extract the value of the record which is a struct and not a map anymore
+        // values
         Struct recordValues = Requirements.requireStructOrNull(operatingValue(record), PURPOSE);
-        log.info("Record Values {}", recordValues);
-
-        Object currentValue = recordValues.get(currentFieldName);
-        log.info("Current Value {}", currentValue);
-
-        // create a new struct with the updated value
         Struct recordUpdatedValues = new Struct(updatedSchema);
         for (Field field : recordValues.schema().fields()) {
 
-            // remove the current field name from the value
-            if(Objects.equals(field.name(), currentFieldName)) {
+            if(Objects.equals(field.name(), this.fieldName)) {
                 continue;
             }
             recordUpdatedValues.put(field.name(), recordValues.get(field));
         }
-        recordUpdatedValues.put(newFieldName, currentValue);
-        log.info("Record Updated Values {}", recordUpdatedValues);
+        List<Struct> convertedItems = convertToStructArray((String) recordValues.get(this.fieldName));
+        List<Struct> convertedAndMergedItems = mergeStructArray(convertedItems);
+        recordUpdatedValues.put(this.fieldName, convertedAndMergedItems);
 
         return newRecord(record, updatedSchema, recordUpdatedValues);
     }
+
+    private List<Struct> mergeStructArray(List<Struct> convertedItems) {
+
+        return convertedItems.stream().collect(Collectors.groupingBy(item -> item.get("item_id")))
+                .values()
+                .stream()
+                .map(items -> {
+
+                    Struct mergedItem = new Struct(PurchaseItemSchema.PURCHASE_ITEM_SCHEMA_FLAT);
+                    int mergedPrice = items.stream().mapToInt(item -> (int) item.get("price")).sum();
+                    mergedItem.put("item_id", items.get(0).get("item_id"));
+                    mergedItem.put("name", items.get(0).get("name"));
+                    mergedItem.put("price", mergedPrice);
+                    return mergedItem;
+                }).collect(Collectors.toList());
+    }
+
+    private List<Struct> convertToStructArray(String value) throws JsonProcessingException {
+        return PurchaseItemConverter.convertToStructArray(value);
+    }
+
 
     @Override
     public void close() {
@@ -138,7 +134,7 @@ public abstract class RenameField <R extends ConnectRecord<R>> implements Transf
         return CONFIG_DEF;
     }
 
-    public static class Key<R extends ConnectRecord<R>> extends RenameField<R> {
+    public static class Key<R extends ConnectRecord<R>> extends MergedPurchaseItemToArray<R> {
 
         @Override
         protected Schema operatingSchema(R kafkaRecord) {
@@ -157,7 +153,7 @@ public abstract class RenameField <R extends ConnectRecord<R>> implements Transf
 
     }
 
-    public static class Value<R extends ConnectRecord<R>> extends RenameField<R> {
+    public static class Value<R extends ConnectRecord<R>> extends MergedPurchaseItemToArray<R> {
 
         @Override
         protected Schema operatingSchema(R kafkaRecord) {

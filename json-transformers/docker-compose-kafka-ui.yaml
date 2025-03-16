@@ -1,0 +1,24 @@
+version: '3.6'
+
+#You may have issues if you change dependency versions
+
+services:
+  kafka-ui:
+    hostname: kafka-ui
+    container_name: kafka-ui
+    image: provectuslabs/kafka-ui:v0.7.2
+    ports:
+      - "8090:8080"
+    networks:
+      - json-transformers_some-net
+    environment:
+      KAFKA_CLUSTERS_0_NAME: my-cluster
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: "kafka:9092"
+      KAFKA_CLUSTERS_0_SCHEMAREGISTRY: "http://schema-registry:8085"
+      DYNAMIC_CONFIG_ENABLED: 'true'
+      KAFKA_CLUSTERS_0_AUDIT_TOPICAUDITENABLED: 'true'
+      KAFKA_CLUSTERS_0_AUDIT_CONSOLEAUDITENABLED: 'true'
+
+networks:
+  json-transformers_some-net:
+    external: true

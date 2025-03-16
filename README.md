@@ -7,3 +7,6 @@ You can find the following samples in this repository in the order :
 - [check-integrity-transformer](check-integrity-transformer/readme.md) : This sample shows how to use the `transform` feature of Kafka Connect to add a new field to the record and check the integrity of the record.
 - [simple-transformers](simple-transformers/readme.md) : This sample shows how to use the `transform` feature of Kafka Connect to add a new field to the record and other simple examples like rename field and identity.
 - [json-transformer](json-transformer/readme.md) : This sample shows how to use the `transform` feature of Kafka Connect to manipulate JSON objects with kafka connect transformers.
+
+## References
+- https://docs.confluent.io/kafka-connectors/jdbc/current/source-connector/source_config_options.html
